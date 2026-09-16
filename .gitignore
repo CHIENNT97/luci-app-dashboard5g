@@ -1,0 +1,8 @@
+# OpenWrt Package Build artifacts
+/build_dir/
+/bin/
+*.ipk
+*.tar.gz
+*.log
+.DS_Store
+Thumbs.db

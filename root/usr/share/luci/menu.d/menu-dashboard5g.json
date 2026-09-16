@@ -1,0 +1,13 @@
+{
+	"admin/status/dashboard5g": {
+		"title": "Dashboard 5G",
+		"order": 1,
+		"action": {
+			"type": "view",
+			"path": "status/dashboard5g"
+		},
+		"depends": {
+			"acl": [ "luci-mod-status-dashboard5g" ]
+		}
+	}
+}

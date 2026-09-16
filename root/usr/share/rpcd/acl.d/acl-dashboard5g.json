@@ -1,0 +1,52 @@
+{
+	"luci-mod-status-dashboard5g": {
+		"description": "Grant access to 5G Modem Dashboard, SMS, AT Terminal, TTL Bypass, WiFi Settings, Device Blocking, ROM Update, RAT Lock and Passwall Installer",
+		"read": {
+			"ubus": {
+				"luci.5g": [
+					"getStatus",
+					"sendAt",
+					"reconnect",
+					"rebootModem",
+					"listSms",
+					"sendSms",
+					"deleteSms",
+					"getTtl",
+					"setTtl",
+					"getWifi",
+					"setWifi",
+					"blockDevice",
+					"getRomConfig",
+					"checkRomFolder",
+					"getFlashStatus",
+					"getPasswallStatus",
+					"getRatMode",
+					"setPhone"
+				],
+				"network.interface.5G": [
+					"status"
+				]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.5g": [
+					"sendAt",
+					"reconnect",
+					"rebootModem",
+					"sendSms",
+					"deleteSms",
+					"setTtl",
+					"setWifi",
+					"blockDevice",
+					"checkRomFolder",
+					"startFlashRom",
+					"installPasswall",
+					"clearPasswallLog",
+					"setRatMode",
+					"setPhone"
+				]
+			}
+		}
+	}
+}

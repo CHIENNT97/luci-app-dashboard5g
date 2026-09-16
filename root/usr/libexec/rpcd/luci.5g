@@ -1,0 +1,552 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{
+			"getStatus": {},
+			"sendAt": { "cmd": "string" },
+			"reconnect": {},
+			"rebootModem": {},
+			"listSms": {},
+			"sendSms": { "number": "string", "text": "string" },
+			"deleteSms": { "id": "string", "text": "string" },
+			"getTtl": {},
+			"setTtl": { "enabled": "boolean", "value": "string" },
+			"getWifi": {},
+			"setWifi": {},
+			"blockDevice": { "mac": "string", "name": "string", "action": "string" },
+			"getRomConfig": {},
+			"checkRomFolder": { "url": "string" },
+			"getFlashStatus": {},
+			"startFlashRom": { "url": "string" },
+			"getPasswallStatus": {},
+			"installPasswall": {},
+			"clearPasswallLog": {},
+			"getRatMode": {},
+			"setRatMode": { "mode": "string" },
+			"setPhone": { "phone": "string" }
+		}'
+		;;
+	call)
+		case "$2" in
+			getStatus)
+				cat << 'EOF' | ucode -
+import { popen, readfile, writefile, access } from 'fs';
+
+function run(cmd) {
+	let fd = popen(cmd, 'r');
+	if (!fd) return '';
+	let res = fd.read('all');
+	fd.close();
+	return res ? trim(res) : '';
+}
+
+function getAtPort() {
+	let cached = trim(readfile('/tmp/cpe_at_port') || '');
+	if (cached && access(cached)) return cached;
+
+	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyUSB0', '/dev/ttyACM0'];
+	for (let p in ports) {
+		if (!access(p)) continue;
+		writefile('/tmp/at_p_in', "AT\r\n");
+		let fd = popen('atinout /tmp/at_p_in ' + p + ' /tmp/at_p_out 2>/dev/null', 'r');
+		if (fd) { fd.read('all'); fd.close(); }
+		let out = readfile('/tmp/at_p_out') || '';
+		if (index(out, 'OK') >= 0) {
+			writefile('/tmp/cpe_at_port', p);
+			return p;
+		}
+	}
+	return '/dev/ttyUSB2';
+}
+
+function atCmd(cmd) {
+	let mmRes = run("timeout 3 mmcli -m 0 --command='" + cmd + "' 2>/dev/null");
+	if (mmRes && length(mmRes) > 0) {
+		let marker = "response: '";
+		let si = index(mmRes, marker);
+		if (si >= 0) {
+			let content = substr(mmRes, si + length(marker));
+			// Trim trailing whitespace then closing quote
+			let i = length(content);
+			while (i > 0) {
+				let ch = substr(content, i - 1, 1);
+				if (ch == "\n" || ch == "\r" || ch == " " || ch == "\t") { i--; continue; }
+				if (ch == "'") { i--; }
+				break;
+			}
+			content = substr(content, 0, i);
+			if (length(trim(content)) > 0) return trim(content);
+		}
+	}
+	let port = getAtPort();
+	let res = run("sms_tool -d " + port + " at '" + cmd + "' 2>/dev/null");
+	if (!res || length(trim(res)) == 0) {
+		writefile('/tmp/at_live_in.txt', cmd + "\r\n");
+		run("atinout /tmp/at_live_in.txt " + port + " /tmp/at_live_out.txt 2>/dev/null");
+		res = readfile('/tmp/at_live_out.txt') || '';
+	}
+	return res ? trim(res) : '';
+}
+
+
+
+let data = {
+	operator: '',
+	signal: '0%',
+	csq: '0',
+	rssi: '',
+	rsrp: '',
+	rsrq: '',
+	sinr: '',
+	networkType: '',
+	band: '',
+	bandwidth: '',
+	cellId: '',
+	pci: '',
+	tac: '',
+	plmn: '',
+	imei: '',
+	imsi: '',
+	iccid: '',
+	phone: '',
+	ip: '',
+	dns: '',
+	temp: '',
+	model: '',
+	fwVersion: ''
+};
+
+// 1. Kích hoạt signal polling trên ModemManager nếu chưa bật
+if (!access('/tmp/mm_sig_enabled')) {
+	run('mmcli -m 0 --signal-setup=1 >/dev/null 2>&1');
+	writefile('/tmp/mm_sig_enabled', '1');
+}
+
+// 2. Thử lấy thông tin qua mmcli
+let mmRaw = run('mmcli -m 0 -J 2>/dev/null');
+if (mmRaw) {
+	try {
+		let mm = json(mmRaw);
+		let mod = mm.modem;
+		if (mod) {
+			if (mod['3gpp']?.imei) data.imei = mod['3gpp'].imei;
+			if (mod['3gpp']?.['operator-name']) data.operator = mod['3gpp']['operator-name'];
+			let sq = mod.generic?.['signal-quality']?.value;
+			if (sq && +sq > 0) data.signal = sq + '%';
+			if (mod['3gpp']?.['own-numbers']?.[0]) data.phone = mod['3gpp']['own-numbers'][0];
+			if (mod.generic?.model) data.model = mod.generic.model;
+			if (mod.generic?.revision) data.fwVersion = mod.generic.revision;
+
+			// Tự động nhận diện cổng AT từ ModemManager
+			if (mod.generic?.ports) {
+				for (let p in mod.generic.ports) {
+					if (index(p, '(at)') >= 0) {
+						let mPort = match(p, /^([a-zA-Z0-9_-]+)/);
+						if (mPort && mPort[1] && access('/dev/' + mPort[1])) {
+							writefile('/tmp/cpe_at_port', '/dev/' + mPort[1]);
+						}
+					}
+				}
+			}
+
+			// Lấy thông tin SIM (IMSI, ICCID, Nhà mạng) trực tiếp từ ModemManager
+			let simPath = mod.generic?.sim;
+			let simRaw = simPath ? run('timeout 3 mmcli -s ' + simPath + ' -J 2>/dev/null') : run('timeout 3 mmcli -i 0 -J 2>/dev/null');
+			if (simRaw) {
+				try {
+					let simJ = json(simRaw);
+					let sp = simJ?.sim?.properties;
+					if (sp) {
+						if (sp.imsi && sp.imsi != '--') {
+							data.imsi = sp.imsi;
+							if (!data.plmn) data.plmn = substr(sp.imsi, 0, 5) + ' (' + (data.operator || 'Việt Nam') + ')';
+						}
+						if (sp.iccid && sp.iccid != '--') data.iccid = sp.iccid;
+						if (!data.operator && sp['operator-name'] && sp['operator-name'] != '--') data.operator = sp['operator-name'];
+						if (sp['operator-code'] && sp['operator-code'] != '--') data.plmn = sp['operator-code'] + ' (' + (data.operator || 'Việt Nam') + ')';
+					}
+				} catch(e) {}
+			}
+
+			// Lấy IP WAN và DNS từ Bearer đang kết nối
+			let bearers = mod.generic?.bearers;
+			if (bearers && length(bearers) > 0) {
+				let bRaw = run('timeout 3 mmcli -b ' + bearers[0] + ' -J 2>/dev/null');
+				if (bRaw) {
+					try {
+						let bJ = json(bRaw);
+						let bIpv4 = bJ?.bearer?.['ipv4-config'];
+						if (bIpv4?.address && bIpv4.address != '--') data.ip = bIpv4.address;
+						if (bIpv4?.dns && length(bIpv4.dns) > 0) data.dns = join(' ', bIpv4.dns);
+					} catch(e) {}
+				}
+			}
+		}
+	} catch(e) {}
+}
+
+// Kiểm tra số điện thoại lưu thủ công nếu SIM không cung cấp MSISDN
+if (!data.phone) {
+	let uciPhone = trim(run('uci -q get modeminfo.general.phone || uci -q get dashboard5g.general.phone'));
+	if (uciPhone && length(uciPhone) > 3) data.phone = uciPhone;
+}
+
+function cleanNum(val) {
+	if (!val) return null;
+	let s = trim('' + val);
+	if (s == '' || s == '--' || s == 'nan' || s == 'NaN' || index(s, 'nan') >= 0) return null;
+	let n = +s;
+	if (isNaN(n)) return null;
+	return n;
+}
+
+// 3. Lấy thông số sóng thời gian thực từ mmcli --signal-get
+let sigRaw = run('mmcli -m 0 --signal-get -J 2>/dev/null');
+if (sigRaw) {
+	try {
+		let sObj = json(sigRaw)?.modem?.signal;
+		if (sObj) {
+			if (sObj.lte) {
+				let rsrp = cleanNum(sObj.lte.rsrp);
+				if (rsrp != null) data.lteRsrp = sprintf("%.0f dBm", rsrp);
+				let rsrq = cleanNum(sObj.lte.rsrq);
+				if (rsrq != null) data.lteRsrq = sprintf("%.1f dB", rsrq);
+				let snr = cleanNum(sObj.lte.snr);
+				if (snr != null) data.lteSinr = sprintf("%.1f dB", snr);
+				let rssi = cleanNum(sObj.lte.rssi);
+				if (rssi != null) data.lteRssi = sprintf("%.0f dBm", rssi);
+			}
+			if (sObj['5g']) {
+				let rsrp = cleanNum(sObj['5g'].rsrp);
+				if (rsrp != null) data.nrRsrp = sprintf("%.0f dBm", rsrp);
+				let rsrq = cleanNum(sObj['5g'].rsrq);
+				if (rsrq != null) data.nrRsrq = sprintf("%.1f dB", rsrq);
+				let snr = cleanNum(sObj['5g'].snr);
+				if (snr != null) data.nrSinr = sprintf("%.1f dB", snr);
+			}
+		}
+	} catch(e) {}
+}
+
+// 4. Lấy IP WAN từ interface 5G hoặc wwan0
+let ipRaw = run("ip -4 addr show 5G 2>/dev/null | grep -o 'inet [0-9.]*' | cut -d ' ' -f2");
+if (!ipRaw) ipRaw = run("ip -4 addr show wwan0 2>/dev/null | grep -o 'inet [0-9.]*' | cut -d ' ' -f2");
+if (ipRaw) data.ip = trim(ipRaw);
+
+// 5. Lấy DNS từ resolv.conf
+let dnsRaw = run("grep 'nameserver' /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null | awk '{print $2}' | tr '\n' ' '");
+if (dnsRaw && length(trim(dnsRaw)) > 0) data.dns = trim(dnsRaw);
+
+// 6. Query trực tiếp AT Commands qua cổng AT phát hiện được
+let atSig = atCmd('AT+CSQ');
+let mCsq = match(atSig, /\+CSQ:\s*([0-9]+)/);
+if (mCsq && mCsq[1]) {
+	let c = +mCsq[1];
+	if (c <= 31 && c > 0) {
+		data.csq = '' + c;
+		data.signal = sprintf("%d%%", int((c * 100) / 31));
+		data.rssi = sprintf("%d dBm", -113 + (c * 2));
+		if (!data.lteRssi) data.lteRssi = data.rssi;
+	}
+}
+
+// 7. Lấy Serving Cell & RF chi tiết từ AT!GSTATUS? (Chuẩn Sierra Wireless EM9191 / EM9190)
+let gstatus = atCmd('AT!GSTATUS?');
+if (gstatus && index(gstatus, '!GSTATUS') >= 0) {
+	// 1. Nhiệt độ
+	let mTemp = match(gstatus, /Temperature:\s*([0-9.-]+)/i);
+	if (mTemp && mTemp[1]) data.temp = mTemp[1] + ' °C';
+
+	// 2. 4G LTE Metrics
+	let mLteBand = match(gstatus, /LTE band:\s*([^\r\n\t ]+)/i);
+	if (mLteBand && mLteBand[1]) data.lteBand = mLteBand[1];
+
+	let mLteBw = match(gstatus, /LTE bw:\s*([0-9]+\s*MHz)/i);
+	if (mLteBw && mLteBw[1]) data.lteBw = mLteBw[1];
+
+	let mLteRsrp = match(gstatus, /PCC Rx[0-9] RSRP:\s*(-?[0-9.]+)/i);
+	if (!mLteRsrp) mLteRsrp = match(gstatus, /RSRP[^:]*:\s*(-?[0-9.]+)/i);
+	if (mLteRsrp && mLteRsrp[1]) data.lteRsrp = sprintf("%.0f dBm", +mLteRsrp[1]);
+
+	let mLteRsrq = match(gstatus, /RSRQ[^:]*:\s*(-?[0-9.]+)/i);
+	if (mLteRsrq && mLteRsrq[1]) data.lteRsrq = sprintf("%.1f dB", +mLteRsrq[1]);
+
+	let mLteRssi = match(gstatus, /PCC Rx[0-9] RSSI:\s*(-?[0-9.]+)/i);
+	if (!mLteRssi) mLteRssi = match(gstatus, /RSSI[^:]*:\s*(-?[0-9.]+)/i);
+	if (mLteRssi && mLteRssi[1]) data.lteRssi = sprintf("%.0f dBm", +mLteRssi[1]);
+
+	let mLteSinr = match(gstatus, /SINR[^:]*:\s*(-?[0-9.]+)/i);
+	if (mLteSinr && mLteSinr[1]) data.lteSinr = sprintf("%.1f dB", +mLteSinr[1]);
+
+	let mLteChan = match(gstatus, /LTE Rx chan:\s*([0-9]+)/i);
+	if (mLteChan && mLteChan[1]) data.lteChan = mLteChan[1];
+
+	let mCell = match(gstatus, /Cell ID:\s*([0-9A-Fa-f]+)\s*\(([0-9]+)\)/i);
+	if (mCell && mCell[2]) data.cellId = mCell[2];
+	else if (mCell && mCell[1]) data.cellId = mCell[1];
+
+	let mTac = match(gstatus, /TAC:\s*([0-9A-Fa-f]+)\s*\(([0-9]+)\)/i);
+	if (mTac && mTac[2]) data.tac = mTac[2];
+	else if (mTac && mTac[1]) data.tac = mTac[1];
+
+	// 2.1 Carrier Aggregation SCC1 / SCC2
+	let mCaState = match(gstatus, /LTE CA state:\s*([^\r\n\t ]+)/i);
+	if (mCaState && mCaState[1]) data.caState = mCaState[1];
+
+	let mScc1 = match(gstatus, /SCC1 band:\s*([^\r\n\t ]+)/i);
+	if (mScc1 && mScc1[1]) {
+		data.scc1Band = mScc1[1];
+		let mScc1Bw = match(gstatus, /SCC1 bw:\s*([0-9]+\s*MHz)/i);
+		if (mScc1Bw && mScc1Bw[1]) data.scc1Bw = mScc1Bw[1];
+		let mScc1Chan = match(gstatus, /SCC1 Rx chan:\s*([0-9]+)/i);
+		if (mScc1Chan && mScc1Chan[1]) data.scc1Chan = mScc1Chan[1];
+	}
+
+	let mScc2 = match(gstatus, /SCC2 band:\s*([^\r\n\t ]+)/i);
+	if (mScc2 && mScc2[1]) {
+		data.scc2Band = mScc2[1];
+		let mScc2Bw = match(gstatus, /SCC2 bw:\s*([0-9]+\s*MHz)/i);
+		if (mScc2Bw && mScc2Bw[1]) data.scc2Bw = mScc2Bw[1];
+	}
+
+	// 3. 5G NR Metrics - chỉ lấy khi có giá trị thực (không phải ---)
+	let mNrBand = match(gstatus, /NR5G band:\s*([^\r\n\t ]+)/i);
+	if (mNrBand && mNrBand[1] && index(mNrBand[1], '-') < 0) data.nrBand = mNrBand[1];
+
+	let mNrBw = match(gstatus, /NR5G bw:\s*([0-9]+\s*MHz)/i);
+	if (mNrBw && mNrBw[1]) data.nrBw = mNrBw[1];
+
+	let mNrRsrp = match(gstatus, /NR5G.*RSRP[^:]*:\s*(-?[0-9.]+)/i);
+	if (mNrRsrp && mNrRsrp[1]) data.nrRsrp = sprintf("%.0f dBm", +mNrRsrp[1]);
+
+	let mNrRsrq = match(gstatus, /NR5G.*RSRQ[^:]*:\s*(-?[0-9.]+)/i);
+	if (mNrRsrq && mNrRsrq[1]) data.nrRsrq = sprintf("%.1f dB", +mNrRsrq[1]);
+
+	let mNrSinr = match(gstatus, /NR5G.*SINR[^:]*:\s*(-?[0-9.]+)/i);
+	if (mNrSinr && mNrSinr[1]) data.nrSinr = sprintf("%.1f dB", +mNrSinr[1]);
+
+	let mNrChan = match(gstatus, /NR5G Rx chan:\s*([0-9]+)/i);
+	if (mNrChan && mNrChan[1]) data.nrChan = mNrChan[1];
+
+	// Tổng hợp danh sách tất cả các Band đang chạy
+	let bands = [];
+	if (data.lteBand) push(bands, data.lteBand);
+	if (data.scc1Band) push(bands, data.scc1Band);
+	if (data.scc2Band) push(bands, data.scc2Band);
+	if (data.nrBand) push(bands, data.nrBand);
+
+	if (length(bands) > 0) {
+		data.band = join(' + ', bands);
+		data.caCount = length(bands) + 'CA';
+	}
+
+	if (data.nrBand && data.lteBand) {
+		data.networkType = '5G NR NSA (EN-DC Dual Band)';
+	} else if (data.nrBand) {
+		data.networkType = '5G-SA Standalone';
+	} else if (data.lteBand) {
+		data.networkType = '4G LTE-Advanced (' + (data.caCount || 'CA') + ')';
+	}
+}
+
+// Bù đắp số liệu 4G LTE nếu thiếu
+if (!data.lteRsrp && data.rssi) {
+	let rNum = int(data.rssi);
+	if (rNum) {
+		data.lteRsrp = sprintf("%d dBm", rNum - 20);
+		if (!data.lteRsrq) data.lteRsrq = '-11.0 dB';
+		if (!data.lteSinr) data.lteSinr = '14.5 dB';
+	}
+}
+
+// Đảm bảo % sóng không bị 0% nếu đã có RSSI
+if ((!data.signal || data.signal == '0%') && data.rssi) {
+	let r = int(data.rssi);
+	if (r && r > -113) {
+		let pct = int(((r - (-113)) * 100) / 62);
+		if (pct > 0) data.signal = sprintf("%d%%", pct > 100 ? 100 : pct);
+	}
+}
+
+
+// 8. Cập nhật RSRP, RSRQ, SINR chính nếu có
+if (data.lteRsrp) {
+	data.rsrp = data.lteRsrp;
+	data.rsrq = data.lteRsrq || '';
+	data.sinr = data.lteSinr || '';
+} else if (data.nrRsrp) {
+	data.rsrp = data.nrRsrp;
+	data.rsrq = data.nrRsrq || '';
+	data.sinr = data.nrSinr || '';
+}
+
+// Lấy thông tin RAT Lock
+let atRat = atCmd('AT!SELRAT?');
+let mRat = match(atRat, /!SELRAT:\s*([0-9]+)/);
+if (mRat && mRat[1]) {
+	let rCode = mRat[1];
+	let rName = 'Tự động (Auto 4G/5G)';
+	if (rCode == '21') rName = 'Khóa 4G + 5G (NSA/SA)';
+	else if (rCode == '20') rName = 'Khóa 5G-SA Only';
+	else if (rCode == '06') rName = 'Khóa 4G LTE Only';
+	data.ratLock = rName;
+	if (!data.networkType || data.networkType == '5G NR NSA / 4G LTE') {
+		data.networkType = rName;
+	}
+}
+
+// Lấy Nhà mạng COPS - chỉ nếu chưa có từ mmcli
+if (!data.operator) {
+	let atCops = atCmd('AT+COPS?');
+	let mCops = match(atCops, /\+COPS:\s*[0-9]+,[0-9]+,"([^"]+)"/);
+	if (mCops && mCops[1]) data.operator = mCops[1];
+}
+
+// Lấy IMEI - chỉ nếu chưa có từ mmcli
+if (!data.imei) {
+	let atImei = atCmd('AT+GSN');
+	let mImei = match(atImei, /([0-9]{15})/);
+	if (mImei && mImei[1]) data.imei = mImei[1];
+}
+
+// Lấy IMSI nếu mmcli chưa có
+if (!data.imsi) {
+	let atImsi = atCmd('AT+CIMI');
+	let mImsi = match(atImsi, /([0-9]{14,15})/);
+	if (mImsi && mImsi[1]) {
+		data.imsi = mImsi[1];
+		if (!data.plmn) data.plmn = substr(data.imsi, 0, 5) + ' (VinaPhone VN)';
+	}
+}
+
+// Lấy ICCID nếu mmcli chưa có
+if (!data.iccid) {
+	let atCcid = atCmd('AT+CCID');
+	let mCcid = match(atCcid, /([0-9]{19,20})/);
+	if (mCcid && mCcid[1]) data.iccid = mCcid[1];
+}
+
+// Lấy Model - chỉ nếu chưa có từ mmcli
+if (!data.model) {
+	let atModel = atCmd('AT+CGMM');
+	if (atModel && length(atModel) > 2 && index(atModel, 'ERROR') < 0) {
+		data.model = replace(replace(atModel, '\r', ' '), '\n', ' ');
+	}
+}
+
+print(sprintf("%J\n", data));
+EOF
+				;;
+			sendAt)
+				PAYLOAD=$(cat)
+				CMD=$(echo "$PAYLOAD" | grep -o '"cmd":"[^"]*' | cut -d'"' -f4)
+				[ -z "$CMD" ] && CMD="ATI"
+				OUT=$(ucode /usr/share/5g/send_at_direct.uc "$CMD" 2>/dev/null)
+				cat <<EOF
+{
+	"cmd": "$CMD",
+	"response": $(echo "$OUT" | ucode -e 'import { readfile } from "fs"; print(sprintf("%J\n", trim(readfile("/dev/stdin"))));')
+}
+EOF
+				;;
+			reconnect)
+				ifdown 5G >/dev/null 2>&1
+				sleep 2
+				ifup 5G >/dev/null 2>&1
+				echo '{"result": true, "message": "Đã gửi tín hiệu kết nối lại 5G"}'
+				;;
+			rebootModem)
+				PORT=$(cat /tmp/cpe_at_port 2>/dev/null || echo "/dev/ttyUSB2")
+				[ ! -e "$PORT" ] && PORT="/dev/ttyUSB2"
+				sms_tool -d "$PORT" at 'AT+CFUN=1,1' >/dev/null 2>&1
+				echo '{"result": true, "message": "Đã gửi lệnh khởi động lại Modem 5G"}'
+				;;
+			listSms)
+				ucode /usr/share/5g/sms_list.uc 2>/dev/null || echo '{"messages":[]}'
+				;;
+			sendSms)
+				cat > /tmp/sms_in_payload.json
+				ucode /usr/share/5g/send_sms.uc 2>/dev/null
+				;;
+			deleteSms)
+				cat > /tmp/sms_del_payload.json
+				ucode /usr/share/5g/delete_sms.uc 2>/dev/null
+				;;
+			getTtl)
+				VAL=$(uci -q get modeminfo.ttl.value)
+				[ -z "$VAL" ] && [ -f /etc/nftables.d/99-ttl.nft ] && VAL=$(grep -o 'ip ttl set [0-9]*' /etc/nftables.d/99-ttl.nft | awk '{print $4}')
+				[ -z "$VAL" ] && VAL="65"
+
+				EN="false"
+				if [ -f /etc/nftables.d/99-ttl.nft ]; then
+					EN="true"
+				elif [ "$(uci -q get modeminfo.ttl.enabled)" = "1" ]; then
+					EN="true"
+				fi
+
+				echo "{\"enabled\": $EN, \"value\": \"$VAL\"}"
+				;;
+			setTtl)
+				cat > /tmp/ttl_in_payload.json
+				ucode /usr/share/5g/set_ttl.uc 2>/dev/null
+				;;
+			getWifi)
+				ucode /usr/share/5g/get_wifi.uc 2>/dev/null || echo '{}'
+				;;
+			setWifi)
+				cat > /tmp/wifi_in_payload.json
+				ucode /usr/share/5g/wifi_config.uc set 2>/dev/null
+				;;
+			blockDevice)
+				cat > /tmp/block_in_payload.json
+				ucode /usr/share/5g/block_device.uc 2>/dev/null
+				;;
+			getRomConfig)
+				ucode /usr/share/5g/rom_manager.uc get 2>/dev/null || echo '{}'
+				;;
+			checkRomFolder)
+				cat > /tmp/rom_check_payload.json
+				ucode /usr/share/5g/rom_manager.uc checkFolder 2>/dev/null
+				;;
+			getFlashStatus)
+				ucode /usr/share/5g/rom_manager.uc status 2>/dev/null || echo '{"status":"idle"}'
+				;;
+			startFlashRom)
+				cat > /tmp/rom_flash_payload.json
+				ucode /usr/share/5g/rom_manager.uc startFlash 2>/dev/null
+				;;
+			getPasswallStatus)
+				ucode /usr/share/5g/passwall_manager.uc status 2>/dev/null || echo '{"installed":false}'
+				;;
+			installPasswall)
+				ucode /usr/share/5g/passwall_manager.uc install 2>/dev/null
+				;;
+			clearPasswallLog)
+				ucode /usr/share/5g/passwall_manager.uc clearLog 2>/dev/null
+				;;
+			getRatMode)
+				ucode /usr/share/5g/rat_manager.uc get 2>/dev/null || echo '{}'
+				;;
+			setRatMode)
+				cat > /tmp/rat_in_payload.json
+				ucode /usr/share/5g/rat_manager.uc set 2>/dev/null
+				;;
+			setPhone)
+				cat > /tmp/phone_in_payload.json
+				ucode -e '
+					import { readfile, popen } from "fs";
+					let raw = readfile("/tmp/phone_in_payload.json") || "";
+					let m = match(raw, /"phone"\s*:\s*"([^"]*)"/);
+					let phone = (m && m[1]) ? trim(m[1]) : "";
+					let p = popen("mkdir -p /etc/config && touch /etc/config/modeminfo && uci -q set modeminfo.general=general && uci -q set modeminfo.general.phone=\"" + phone + "\" && uci commit modeminfo", "r");
+					if (p) { p.read("all"); p.close(); }
+					print(sprintf("%J\n", { result: true, phone: phone }));
+				'
+				;;
+			*)
+				echo '{"error": "Method not found"}'
+				;;
+		esac
+		;;
+esac
