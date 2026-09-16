@@ -1,2 +1,17 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Enforce LF line endings for Linux and OpenWrt compatibility
+* text=auto eol=lf
+Makefile text eol=lf
+*.sh text eol=lf
+*.uc text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.md text eol=lf
+
+# Windows scripts
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaries
+*.ipk binary
+*.tar.gz binary
+
