@@ -45,47 +45,24 @@ function getAtPort() {
 	let cached = trim(readfile('/tmp/cpe_at_port') || '');
 	if (cached && access(cached)) return cached;
 
-	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyUSB0', '/dev/ttyACM0'];
+	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB0', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyACM0'];
 	for (let p in ports) {
 		if (!access(p)) continue;
-		writefile('/tmp/at_p_in', "AT\r\n");
-		let fd = popen('atinout /tmp/at_p_in ' + p + ' /tmp/at_p_out 2>/dev/null', 'r');
-		if (fd) { fd.read('all'); fd.close(); }
-		let out = readfile('/tmp/at_p_out') || '';
+		let out = run("lua /usr/share/5g/at_query.lua " + p + " 'AT' 0.5 2>/dev/null");
 		if (index(out, 'OK') >= 0) {
 			writefile('/tmp/cpe_at_port', p);
 			return p;
 		}
 	}
-	return '/dev/ttyUSB2';
+	let defPort = access('/dev/ttyUSB0') ? '/dev/ttyUSB0' : '/dev/ttyUSB2';
+	writefile('/tmp/cpe_at_port', defPort);
+	return defPort;
 }
 
-function atCmd(cmd) {
-	let mmRes = run("timeout 3 mmcli -m 0 --command='" + cmd + "' 2>/dev/null");
-	if (mmRes && length(mmRes) > 0) {
-		let marker = "response: '";
-		let si = index(mmRes, marker);
-		if (si >= 0) {
-			let content = substr(mmRes, si + length(marker));
-			// Trim trailing whitespace then closing quote
-			let i = length(content);
-			while (i > 0) {
-				let ch = substr(content, i - 1, 1);
-				if (ch == "\n" || ch == "\r" || ch == " " || ch == "\t") { i--; continue; }
-				if (ch == "'") { i--; }
-				break;
-			}
-			content = substr(content, 0, i);
-			if (length(trim(content)) > 0) return trim(content);
-		}
-	}
+function atCmd(cmd, timeoutSec) {
 	let port = getAtPort();
-	let res = run("sms_tool -d " + port + " at '" + cmd + "' 2>/dev/null");
-	if (!res || length(trim(res)) == 0) {
-		writefile('/tmp/at_live_in.txt', cmd + "\r\n");
-		run("atinout /tmp/at_live_in.txt " + port + " /tmp/at_live_out.txt 2>/dev/null");
-		res = readfile('/tmp/at_live_out.txt') || '';
-	}
+	let t = timeoutSec || 2.0;
+	let res = run("lua /usr/share/5g/at_query.lua " + port + " '" + cmd + "' " + t + " 2>/dev/null");
 	return res ? trim(res) : '';
 }
 
@@ -114,7 +91,12 @@ let data = {
 	dns: '',
 	temp: '',
 	model: '',
-	fwVersion: ''
+	fwVersion: '',
+	dataUsage: '',
+	rxFormatted: '',
+	txFormatted: '',
+	rxBytes: 0,
+	txBytes: 0
 };
 
 // 1. Kích hoạt signal polling trên ModemManager nếu chưa bật
@@ -150,29 +132,26 @@ if (mmRaw) {
 				}
 			}
 
-			// Lấy thông tin SIM (IMSI, ICCID, Nhà mạng) trực tiếp từ ModemManager
-			let simPath = mod.generic?.sim;
-			let simRaw = simPath ? run('timeout 3 mmcli -s ' + simPath + ' -J 2>/dev/null') : run('timeout 3 mmcli -i 0 -J 2>/dev/null');
+			// Lấy thông tin SIM (IMSI, ICCID, Nhà mạng) trực tiếp từ ModemManager (dùng text mode để tránh crash json segfault)
+			let simRaw = run('mmcli -i 0 2>/dev/null') || (simPath ? run('mmcli -s ' + simPath + ' 2>/dev/null') : '');
 			if (simRaw) {
-				try {
-					let simJ = json(simRaw);
-					let sp = simJ?.sim?.properties;
-					if (sp) {
-						if (sp.imsi && sp.imsi != '--') {
-							data.imsi = sp.imsi;
-							if (!data.plmn) data.plmn = substr(sp.imsi, 0, 5) + ' (' + (data.operator || 'Việt Nam') + ')';
-						}
-						if (sp.iccid && sp.iccid != '--') data.iccid = sp.iccid;
-						if (!data.operator && sp['operator-name'] && sp['operator-name'] != '--') data.operator = sp['operator-name'];
-						if (sp['operator-code'] && sp['operator-code'] != '--') data.plmn = sp['operator-code'] + ' (' + (data.operator || 'Việt Nam') + ')';
-					}
-				} catch(e) {}
+				let mImsi = match(simRaw, /imsi:\s*([0-9]+)/);
+				if (mImsi && mImsi[1]) {
+					data.imsi = mImsi[1];
+					if (!data.plmn) data.plmn = substr(data.imsi, 0, 5) + ' (' + (data.operator || 'Việt Nam') + ')';
+				}
+				let mIccid = match(simRaw, /iccid:\s*([0-9]+)/);
+				if (mIccid && mIccid[1]) data.iccid = mIccid[1];
+				let mOp = match(simRaw, /operator name:\s*([^\r\n]+)/);
+				if (mOp && mOp[1] && trim(mOp[1]) != '--') data.operator = trim(mOp[1]);
+				let mOpId = match(simRaw, /operator id:\s*([0-9]+)/);
+				if (mOpId && mOpId[1] && trim(mOpId[1]) != '--') data.plmn = trim(mOpId[1]) + ' (' + (data.operator || 'Việt Nam') + ')';
 			}
 
 			// Lấy IP WAN và DNS từ Bearer đang kết nối
 			let bearers = mod.generic?.bearers;
 			if (bearers && length(bearers) > 0) {
-				let bRaw = run('timeout 3 mmcli -b ' + bearers[0] + ' -J 2>/dev/null');
+				let bRaw = run('mmcli -b ' + bearers[0] + ' -J 2>/dev/null');
 				if (bRaw) {
 					try {
 						let bJ = json(bRaw);
@@ -196,9 +175,9 @@ function cleanNum(val) {
 	if (!val) return null;
 	let s = trim('' + val);
 	if (s == '' || s == '--' || s == 'nan' || s == 'NaN' || index(s, 'nan') >= 0) return null;
-	let n = +s;
-	if (isNaN(n)) return null;
-	return n;
+	let m = match(s, /(-?[0-9.]+)/);
+	if (!m || !m[1]) return null;
+	return +m[1];
 }
 
 // 3. Lấy thông số sóng thời gian thực từ mmcli --signal-get
@@ -234,25 +213,34 @@ let ipRaw = run("ip -4 addr show 5G 2>/dev/null | grep -o 'inet [0-9.]*' | cut -
 if (!ipRaw) ipRaw = run("ip -4 addr show wwan0 2>/dev/null | grep -o 'inet [0-9.]*' | cut -d ' ' -f2");
 if (ipRaw) data.ip = trim(ipRaw);
 
+// 4.1 Lấy dữ liệu Data đã sử dụng (RX / TX / Tổng) từ sysfs
+let rxStr = (access('/sys/class/net/5G/statistics/rx_bytes') ? readfile('/sys/class/net/5G/statistics/rx_bytes') : null) ||
+            (access('/sys/class/net/wwan0/statistics/rx_bytes') ? readfile('/sys/class/net/wwan0/statistics/rx_bytes') : null);
+let txStr = (access('/sys/class/net/5G/statistics/tx_bytes') ? readfile('/sys/class/net/5G/statistics/tx_bytes') : null) ||
+            (access('/sys/class/net/wwan0/statistics/tx_bytes') ? readfile('/sys/class/net/wwan0/statistics/tx_bytes') : null);
+if (rxStr && txStr) {
+	let rx = +trim(rxStr);
+	let tx = +trim(txStr);
+	let total = rx + tx;
+	let formatBytes = function(bytes) {
+		if (bytes >= 1073741824.0) return sprintf("%.2f GB", bytes / 1073741824.0);
+		if (bytes >= 1048576.0) return sprintf("%.1f MB", bytes / 1048576.0);
+		if (bytes >= 1024.0) return sprintf("%.1f KB", bytes / 1024.0);
+		return sprintf("%.0f B", bytes);
+	};
+	data.rxBytes = rx;
+	data.txBytes = tx;
+	data.rxFormatted = formatBytes(rx);
+	data.txFormatted = formatBytes(tx);
+	data.dataUsage = formatBytes(total);
+}
+
 // 5. Lấy DNS từ resolv.conf
 let dnsRaw = run("grep 'nameserver' /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null | awk '{print $2}' | tr '\n' ' '");
 if (dnsRaw && length(trim(dnsRaw)) > 0) data.dns = trim(dnsRaw);
 
-// 6. Query trực tiếp AT Commands qua cổng AT phát hiện được
-let atSig = atCmd('AT+CSQ');
-let mCsq = match(atSig, /\+CSQ:\s*([0-9]+)/);
-if (mCsq && mCsq[1]) {
-	let c = +mCsq[1];
-	if (c <= 31 && c > 0) {
-		data.csq = '' + c;
-		data.signal = sprintf("%d%%", int((c * 100) / 31));
-		data.rssi = sprintf("%d dBm", -113 + (c * 2));
-		if (!data.lteRssi) data.lteRssi = data.rssi;
-	}
-}
-
-// 7. Lấy Serving Cell & RF chi tiết từ AT!GSTATUS? (Chuẩn Sierra Wireless EM9191 / EM9190)
-let gstatus = atCmd('AT!GSTATUS?');
+// 6. Lấy Serving Cell & RF chi tiết từ AT!GSTATUS? (Chuẩn Sierra Wireless EM9191 / EM9190)
+let gstatus = atCmd("AT!GSTATUS?");
 if (gstatus && index(gstatus, '!GSTATUS') >= 0) {
 	// 1. Nhiệt độ
 	let mTemp = match(gstatus, /Temperature:\s*([0-9.-]+)/i);
@@ -360,39 +348,83 @@ if (!data.lteRsrp && data.rssi) {
 	}
 }
 
-// Đảm bảo % sóng không bị 0% nếu đã có RSSI
-if ((!data.signal || data.signal == '0%') && data.rssi) {
-	let r = int(data.rssi);
-	if (r && r > -113) {
-		let pct = int(((r - (-113)) * 100) / 62);
-		if (pct > 0) data.signal = sprintf("%d%%", pct > 100 ? 100 : pct);
+// Đồng bộ RSSI & Tính CSQ chuẩn (0-31)
+if (data.lteRssi) data.rssi = data.lteRssi;
+if (data.rssi) {
+	let rNum = cleanNum(data.rssi);
+	if (rNum != null) {
+		let csqVal = int((rNum + 113) / 2);
+		if (csqVal < 0) csqVal = 0;
+		if (csqVal > 31) csqVal = 31;
+		data.csq = sprintf("%d", csqVal);
 	}
 }
 
-
-// 8. Cập nhật RSRP, RSRQ, SINR chính nếu có
-if (data.lteRsrp) {
-	data.rsrp = data.lteRsrp;
-	data.rsrq = data.lteRsrq || '';
-	data.sinr = data.lteSinr || '';
-} else if (data.nrRsrp) {
+// 8. Cập nhật RSRP, RSRQ, SINR đại diện chính (Ưu tiên sóng 5G NR khi kết nối 5G)
+if (data.nrRsrp) {
 	data.rsrp = data.nrRsrp;
 	data.rsrq = data.nrRsrq || '';
 	data.sinr = data.nrSinr || '';
+} else if (data.lteRsrp) {
+	data.rsrp = data.lteRsrp;
+	data.rsrq = data.lteRsrq || '';
+	data.sinr = data.lteSinr || '';
 }
 
-// Lấy thông tin RAT Lock
-let atRat = atCmd('AT!SELRAT?');
-let mRat = match(atRat, /!SELRAT:\s*([0-9]+)/);
-if (mRat && mRat[1]) {
-	let rCode = mRat[1];
-	let rName = 'Tự động (Auto 4G/5G)';
-	if (rCode == '21') rName = 'Khóa 4G + 5G (NSA/SA)';
-	else if (rCode == '20') rName = 'Khóa 5G-SA Only';
-	else if (rCode == '06') rName = 'Khóa 4G LTE Only';
-	data.ratLock = rName;
-	if (!data.networkType || data.networkType == '5G NR NSA / 4G LTE') {
-		data.networkType = rName;
+// 9. Tính % Cường độ tín hiệu chuyên dụng 4G LTE & 5G NR (RF Signal Quality Index)
+// Thay thế công thức 2G GSM lỗi thời của ModemManager (chỉ tính theo RSSI thô anchor LTE cho ra 16-19%).
+let calcQualityPct = function(rsrpStr, sinrStr, rssiStr) {
+	let rsrp = rsrpStr ? cleanNum(rsrpStr) : null;
+	let sinr = sinrStr ? cleanNum(sinrStr) : null;
+	let rssi = rssiStr ? cleanNum(rssiStr) : null;
+
+	if (rsrp != null) {
+		// Thang đo RSRP chuẩn viễn thông: -120 dBm (0%) -> -80 dBm (100%)
+		let pRsrp = int(((rsrp - (-120)) * 100) / 40);
+		if (pRsrp < 0) pRsrp = 0;
+		if (pRsrp > 100) pRsrp = 100;
+
+		if (sinr != null) {
+			// Thang đo SINR: 0 dB (0%) -> 25 dB (100%)
+			let pSinr = int((sinr * 100) / 25);
+			if (pSinr < 0) pSinr = 0;
+			if (pSinr > 100) pSinr = 100;
+
+			// Trọng số: 70% công suất thu (RSRP) + 30% chất lượng tín hiệu / sạch nhiễu (SINR)
+			let total = int(pRsrp * 0.7 + pSinr * 0.3);
+			return total > 100 ? 100 : (total < 0 ? 0 : total);
+		}
+		return pRsrp;
+	} else if (rssi != null) {
+		let pRssi = int(((rssi - (-113)) * 100) / 62);
+		return pRssi > 100 ? 100 : (pRssi < 0 ? 0 : pRssi);
+	}
+	return null;
+};
+
+let rfPct = null;
+if (data.nrRsrp) {
+	rfPct = calcQualityPct(data.nrRsrp, data.nrSinr, null);
+} else if (data.lteRsrp) {
+	rfPct = calcQualityPct(data.lteRsrp, data.lteSinr, data.rssi);
+} else if (data.rssi) {
+	rfPct = calcQualityPct(null, null, data.rssi);
+}
+
+if (rfPct != null && rfPct > 0) {
+	data.signal = sprintf("%d%%", rfPct);
+}
+
+// Lấy thông tin RAT Lock từ ModemManager hoặc cấu hình
+if (!data.ratLock) {
+	let cm = mod?.generic?.['current-modes'];
+	if (cm) {
+		if (index(cm, '5g') >= 0 && index(cm, '4g') >= 0) data.ratLock = 'Tự động (Auto 4G/5G)';
+		else if (index(cm, '5g') >= 0) data.ratLock = 'Khóa 5G-SA Only';
+		else if (index(cm, '4g') >= 0) data.ratLock = 'Khóa 4G LTE Only';
+		else data.ratLock = 'Tự động (Auto 4G/5G)';
+	} else {
+		data.ratLock = 'Tự động (Auto 4G/5G)';
 	}
 }
 
@@ -457,9 +489,9 @@ EOF
 				echo '{"result": true, "message": "Đã gửi tín hiệu kết nối lại 5G"}'
 				;;
 			rebootModem)
-				PORT=$(cat /tmp/cpe_at_port 2>/dev/null || echo "/dev/ttyUSB2")
-				[ ! -e "$PORT" ] && PORT="/dev/ttyUSB2"
-				sms_tool -d "$PORT" at 'AT+CFUN=1,1' >/dev/null 2>&1
+				PORT=$(cat /tmp/cpe_at_port 2>/dev/null)
+				[ -z "$PORT" ] || [ ! -e "$PORT" ] && { [ -e "/dev/ttyUSB0" ] && PORT="/dev/ttyUSB0" || PORT="/dev/ttyUSB2"; }
+				lua /usr/share/5g/at_query.lua "$PORT" "AT+CFUN=1,1" 2.0 >/dev/null 2>&1
 				echo '{"result": true, "message": "Đã gửi lệnh khởi động lại Modem 5G"}'
 				;;
 			listSms)

@@ -13,44 +13,27 @@ function getAtPort() {
 	let cached = trim(readfile('/tmp/cpe_at_port') || '');
 	if (cached && access(cached)) return cached;
 
-	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyUSB0', '/dev/ttyACM0'];
+	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB0', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyACM0'];
 	for (let p in ports) {
 		if (!access(p)) continue;
-		writefile('/tmp/at_p_in', "AT\r\n");
-		let fd = popen('atinout /tmp/at_p_in ' + p + ' /tmp/at_p_out 2>/dev/null', 'r');
-		if (fd) { fd.read('all'); fd.close(); }
-		let out = readfile('/tmp/at_p_out') || '';
+		let out = run("lua /usr/share/5g/at_query.lua " + p + " 'AT' 0.5 2>/dev/null");
 		if (index(out, 'OK') >= 0) {
 			writefile('/tmp/cpe_at_port', p);
 			return p;
 		}
 	}
-	return '/dev/ttyUSB2';
+	let defPort = access('/dev/ttyUSB0') ? '/dev/ttyUSB0' : '/dev/ttyUSB2';
+	writefile('/tmp/cpe_at_port', defPort);
+	return defPort;
 }
 
 function atCmd(cmd) {
-	let mmRes = run("mmcli -m 0 --command='" + cmd + "' 2>/dev/null");
-	if (mmRes && length(mmRes) > 0) {
-		let marker = "response: '";
-		let si = index(mmRes, marker);
-		if (si >= 0) {
-			let content = substr(mmRes, si + length(marker));
-			let i = length(content);
-			while (i > 0) {
-				let ch = substr(content, i - 1, 1);
-				if (ch == "\n" || ch == "\r" || ch == " " || ch == "\t") { i--; continue; }
-				if (ch == "'") { i--; }
-				break;
-			}
-			content = substr(content, 0, i);
-			if (length(trim(content)) > 0) return trim(content);
-		}
-	}
 	let port = getAtPort();
-	let res = run("sms_tool -d " + port + " at '" + cmd + "' 2>/dev/null");
+	let res = run("lua /usr/share/5g/at_query.lua " + port + " '" + cmd + "' 2.0 2>/dev/null");
 	if (!res || length(trim(res)) == 0) {
 		writefile('/tmp/at_live_in.txt', cmd + "\r\n");
-		run("atinout /tmp/at_live_in.txt " + port + " /tmp/at_live_out.txt 2>/dev/null");
+		writefile('/tmp/at_live_out.txt', "");
+		run("( atinout /tmp/at_live_in.txt " + port + " /tmp/at_live_out.txt 2>/dev/null & PID=$!; ( sleep 2 >/dev/null 2>&1; kill -9 $PID 2>/dev/null ) >/dev/null 2>&1 & wait $PID 2>/dev/null )");
 		res = readfile('/tmp/at_live_out.txt') || '';
 	}
 	return res ? trim(res) : '';

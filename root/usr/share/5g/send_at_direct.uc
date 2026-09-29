@@ -37,36 +37,27 @@ function getAtPort() {
 	let cached = trim(readfile('/tmp/cpe_at_port') || '');
 	if (cached && access(cached)) return cached;
 
-	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyUSB0', '/dev/ttyACM0'];
+	let ports = ['/dev/ttyUSB2', '/dev/ttyUSB0', '/dev/ttyUSB3', '/dev/ttyUSB1', '/dev/ttyACM0'];
 	for (let p in ports) {
 		if (!access(p)) continue;
-		writefile('/tmp/at_p_in', "AT\r\n");
-		let fd = popen('atinout /tmp/at_p_in ' + p + ' /tmp/at_p_out 2>/dev/null', 'r');
-		if (fd) { fd.read('all'); fd.close(); }
-		let out = readfile('/tmp/at_p_out') || '';
+		let out = run("lua /usr/share/5g/at_query.lua " + p + " 'AT' 0.5 2>/dev/null");
 		if (index(out, 'OK') >= 0) {
 			writefile('/tmp/cpe_at_port', p);
 			return p;
 		}
 	}
-	return '/dev/ttyUSB2';
+	let defPort = access('/dev/ttyUSB0') ? '/dev/ttyUSB0' : '/dev/ttyUSB2';
+	writefile('/tmp/cpe_at_port', defPort);
+	return defPort;
 }
 
 let port = getAtPort();
-writefile('/tmp/at_direct_in', cmd + "\r\n");
-let fd = popen('atinout /tmp/at_direct_in ' + port + ' /tmp/at_direct_out 2>/dev/null', 'r');
-if (fd) {
-	fd.read('all');
-	fd.close();
-}
-let res = readfile('/tmp/at_direct_out') || '';
+let res = run("lua /usr/share/5g/at_query.lua " + port + " '" + cmd + "' 2.5 2>/dev/null");
 if (!res || length(trim(res)) == 0) {
-	// Fallback to sms_tool
-	let stFd = popen("sms_tool -d " + port + " at '" + cmd + "' 2>/dev/null", 'r');
-	if (stFd) {
-		res = stFd.read('all') || '';
-		stFd.close();
-	}
+	writefile('/tmp/at_direct_in', cmd + "\r\n");
+	writefile('/tmp/at_direct_out', "");
+	run("( atinout /tmp/at_direct_in " + port + " /tmp/at_direct_out 2>/dev/null & PID=$!; ( sleep 3 >/dev/null 2>&1; kill -9 $PID 2>/dev/null ) >/dev/null 2>&1 & wait $PID 2>/dev/null )");
+	res = readfile('/tmp/at_direct_out') || '';
 }
 print(res);
 

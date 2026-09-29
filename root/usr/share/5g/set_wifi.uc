@@ -28,8 +28,8 @@ if (w2) {
 	}
 	if (w2.channel) run('uci set wireless.MT7981_1_1.channel="' + w2.channel + '"');
 	if (w2.htmode) run('uci set wireless.MT7981_1_1.htmode="' + w2.htmode + '"');
-	run('uci set wireless.default_MT7981_1_1.disabled="' + (w2.disabled ? '1' : '0') + '"');
-	run('uci set wireless.default_MT7981_1_1.hidden="' + (w2.hidden ? '1' : '0') + '"');
+	if (w2.disabled != null) run('uci set wireless.default_MT7981_1_1.disabled="' + (w2.disabled ? '1' : '0') + '"');
+	if (w2.hidden != null) run('uci set wireless.default_MT7981_1_1.hidden="' + (w2.hidden ? '1' : '0') + '"');
 }
 
 let w5 = data.wifi5g;
@@ -45,8 +45,8 @@ if (w5) {
 	}
 	if (w5.channel) run('uci set wireless.MT7981_1_2.channel="' + w5.channel + '"');
 	if (w5.htmode) run('uci set wireless.MT7981_1_2.htmode="' + w5.htmode + '"');
-	run('uci set wireless.default_MT7981_1_2.disabled="' + (w5.disabled ? '1' : '0') + '"');
-	run('uci set wireless.default_MT7981_1_2.hidden="' + (w5.hidden ? '1' : '0') + '"');
+	if (w5.disabled != null) run('uci set wireless.default_MT7981_1_2.disabled="' + (w5.disabled ? '1' : '0') + '"');
+	if (w5.hidden != null) run('uci set wireless.default_MT7981_1_2.hidden="' + (w5.hidden ? '1' : '0') + '"');
 }
 
 run('uci commit wireless');

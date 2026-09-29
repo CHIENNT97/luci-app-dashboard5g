@@ -25,12 +25,18 @@ if (!targetId && !targetText) {
 	if (m) targetId = m[1];
 }
 
-// Xóa trên modem qua mmcli
-if (targetId) {
-	run('mmcli -m 0 --messaging-delete-sms=' + targetId + ' 2>/dev/null');
+// Xác định cổng AT
+let port = trim(readfile('/tmp/cpe_at_port')) || '';
+if (!port || !match(port, /\/dev\/ttyUSB/)) {
+	port = '/dev/ttyUSB0';
 }
 
-// Xóa trong file DB lưu trữ
+// 1. Xóa trên bộ nhớ Modem qua sms_tool & mmcli (nếu có)
+if (targetId && match(targetId, /^[0-9]+$/)) {
+	run(sprintf("flock -x /var/lock/at_port.lock /usr/bin/sms_tool -d %s delete %s 2>/dev/null", port, targetId));
+}
+
+// 2. Xóa trong file CSDL lưu trữ cục bộ
 let dbMessages = [];
 let dbRaw = readfile(DB_FILE);
 if (dbRaw) {
@@ -44,7 +50,7 @@ if (dbRaw) {
 
 let newDb = [];
 for (let m in dbMessages) {
-	if (targetId && m.id == targetId) continue;
+	if (targetId && ("" + m.id) == ("" + targetId)) continue;
 	if (targetText && m.text == targetText) continue;
 	push(newDb, m);
 }
