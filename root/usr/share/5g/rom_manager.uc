@@ -281,11 +281,11 @@ if (action == 'get') {
 	try {
 		let p = json(trim(raw));
 		if (p) {
-			if (p.keepConfig === false || p.keepConfig === 'false') keepConfig = false;
-			if (p.force === false || p.force === 'false') force = false;
+			if (p.keepConfig === false || p.keepConfig === 'false' || p.keepConfig === 0 || p.keepConfig === '0') keepConfig = false;
+			if (p.force === false || p.force === 'false' || p.force === 0 || p.force === '0') force = false;
 		}
 	} catch(e) {
-		if (index(raw, '"keepConfig":false') >= 0 || index(raw, '"keepConfig":"false"') >= 0) keepConfig = false;
+		if (index(raw, '"keepConfig":false') >= 0 || index(raw, '"keepConfig":"false"') >= 0 || index(raw, '"keepConfig":0') >= 0) keepConfig = false;
 	}
 
 	if (!romUrl) {
@@ -297,6 +297,7 @@ if (action == 'get') {
 		status: 'downloading',
 		percent: 5,
 		msg: 'Đang kết nối và tải file ROM về Router...',
+		keep_config: keepConfig,
 		url: romUrl
 	}));
 

@@ -104,18 +104,23 @@ set_status "verifying" 80 "Đã tải xong file ROM (${FINAL_MB} MB). Đang ki�
 sleep 2
 
 # Kiểm tra sysupgrade
+MODE_MSG="Giữ nguyên cấu hình"
+if echo "$FLAGS" | grep -q -- "-n"; then
+	MODE_MSG="Xóa sạch cấu hình"
+fi
+
 if sysupgrade -T "$FIRMWARE_FILE" >/dev/null 2>&1; then
-	set_status "flashing" 90 "File ROM hợp lệ! Đang chuẩn bị nạp Firmware..." "$FINAL_SIZE" "$FINAL_SIZE"
+	set_status "flashing" 90 "File ROM hợp lệ! Đang nạp Firmware (${MODE_MSG})..." "$FINAL_SIZE" "$FINAL_SIZE"
 else
 	# Nếu board name khác nhau (cmcc,rax3000m-stock vs 5g,cpe,V2), tự động bổ sung cờ -F
 	if ! echo "$FLAGS" | grep -q -- "-F"; then
 		FLAGS="$FLAGS -F"
 	fi
-	set_status "flashing" 90 "Đã kích hoạt cờ Buộc nạp (-F) cho dòng chip Filogic. Đang nạp Firmware..." "$FINAL_SIZE" "$FINAL_SIZE"
+	set_status "flashing" 90 "Đã kích hoạt cờ Buộc nạp (-F). Đang nạp Firmware (${MODE_MSG})..." "$FINAL_SIZE" "$FINAL_SIZE"
 fi
 
 sleep 2
-set_status "rebooting" 100 "Đang ghi Firmware vào bộ nhớ Flash và khởi động lại router. Vui lòng đợi 2-3 phút..." "$FINAL_SIZE" "$FINAL_SIZE"
+set_status "rebooting" 100 "Đang nạp Firmware (${MODE_MSG}) và khởi động lại router. Vui lòng đợi 2-3 phút..." "$FINAL_SIZE" "$FINAL_SIZE"
 
 # Tiến hành flash thực tế với các cờ tùy chọn (-n, -F)
 echo "Executing: sysupgrade $FLAGS $FIRMWARE_FILE" > "$LOG_FILE"

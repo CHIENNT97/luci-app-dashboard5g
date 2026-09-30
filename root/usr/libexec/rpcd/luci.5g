@@ -18,7 +18,7 @@ case "$1" in
 			"getRomConfig": {},
 			"checkRomFolder": { "url": "string" },
 			"getFlashStatus": {},
-			"startFlashRom": { "url": "string" },
+			"startFlashRom": { "url": "string", "keepConfig": "bool", "force": "bool" },
 			"getPasswallStatus": {},
 			"installPasswall": {},
 			"clearPasswallLog": {},
