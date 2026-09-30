@@ -20,6 +20,7 @@ var callBlockDevice = rpc.declare({ object: 'luci.5g', method: 'blockDevice', pa
 var callGetRomConfig = rpc.declare({ object: 'luci.5g', method: 'getRomConfig', expect: { } });
 var callCheckRomFolder = rpc.declare({ object: 'luci.5g', method: 'checkRomFolder', params: [ 'url' ], expect: { } });
 var callStartFlashRom = rpc.declare({ object: 'luci.5g', method: 'startFlashRom', params: [ 'url', 'keepConfig', 'force' ], expect: { } });
+var callGetFlashStatus = rpc.declare({ object: 'luci.5g', method: 'getFlashStatus', expect: { } });
 var callGetPasswallStatus = rpc.declare({ object: 'luci.5g', method: 'getPasswallStatus', expect: { } });
 var callInstallPasswall = rpc.declare({ object: 'luci.5g', method: 'installPasswall', expect: { } });
 var callClearPasswallLog = rpc.declare({ object: 'luci.5g', method: 'clearPasswallLog', expect: { } });
@@ -722,6 +723,22 @@ return view.extend({
 						E('input', { 'id': 'cpe-rom-url', 'type': 'text', 'class': 'cbi-input-text', 'style': 'flex: 1;', 'placeholder': 'Nhập link Google Drive Folder hoặc link web chứa file .bin' }),
 						E('button', { 'class': 'cpe-btn cpe-btn-primary', 'click': scanRom }, '🔍 ' + _('Quét Bản ROM'))
 					]),
+
+					// Thẻ Tiến trình nạp ROM trực tiếp trên trang
+					E('div', { 'id': 'rom-progress-box', 'style': 'display: none; background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 20px;' }, [
+						E('div', { 'style': 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;' }, [
+							E('div', { 'style': 'font-weight: 700; font-size: 14px; color: #1e293b;' }, [
+								E('span', { 'id': 'rom-card-icon', 'style': 'margin-right: 6px;' }, '🚀'),
+								E('span', { 'id': 'rom-card-msg' }, _('Đang chuẩn bị tải ROM...'))
+							]),
+							E('span', { 'id': 'rom-card-pct', 'style': 'font-size: 16px; font-weight: 800; color: #2563eb;' }, '0%')
+						]),
+						E('div', { 'style': 'width: 100%; height: 14px; background: #cbd5e1; border-radius: 9999px; overflow: hidden; margin-bottom: 8px;' }, [
+							E('div', { 'id': 'rom-card-bar', 'style': 'height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.3s ease;' })
+						]),
+						E('div', { 'id': 'rom-card-sub', 'style': 'font-size: 12px; color: #64748b; font-family: monospace; text-align: right;' }, '')
+					]),
+
 					E('div', { 'id': 'cpe-rom-box' }, [ E('em', {}, _('Bấm nút "Quét Bản ROM" để kiểm tra các phiên bản Firmware mới nhất.')) ])
 				])
 			]),
@@ -1081,9 +1098,7 @@ return view.extend({
 								'class': 'cpe-btn cpe-btn-primary',
 								'style': 'padding: 4px 12px; font-size: 12px;',
 								'click': function() {
-									if (!confirm(_('Nạp bản ROM: ') + rom.name + '?')) return;
-									callStartFlashRom(rom.url, true, true);
-									ui.showModal(_('Đang nạp ROM...'), [ E('p', {}, _('Hệ thống đang tải và nạp ROM... Vui lòng không rút nguồn!')) ]);
+									startRomFlashWithProgress(rom.name, rom.url);
 								}
 							}, '⚡ ' + _('Nạp ROM'))
 						])
@@ -1091,6 +1106,199 @@ return view.extend({
 				});
 				box.appendChild(tbl);
 			});
+		}
+
+		var flashTimer = null;
+		function startRomFlashWithProgress(romName, romUrl) {
+			if (!confirm(_('Bạn có chắc chắn muốn nạp bản ROM: ') + romName + '?\n\n' +
+			             _('Hệ thống sẽ tải file ROM về Router, kiểm tra tính toàn vẹn và tiến hành nạp Firmware.\nSau khi nạp thành công, Router sẽ tự khởi động lại.'))) {
+				return;
+			}
+
+			// Hiển thị khung tiến trình trên trang
+			var pBox = document.getElementById('rom-progress-box');
+			if (pBox) pBox.style.display = 'block';
+
+			// Dựng Modal hiển thị tiến trình trực quan
+			var modalContent = E('div', { 'style': 'padding: 6px 0;' }, [
+				E('div', { 'style': 'background: #f1f5f9; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 13px;' }, [
+					E('div', { 'style': 'color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase;' }, _('Bản ROM đang nạp:')),
+					E('div', { 'style': 'font-weight: 800; color: #1e293b; font-size: 14px; word-break: break-all; margin-top: 2px;' }, romName)
+				]),
+
+				// 4 Bước thực hiện
+				E('div', { 'style': 'display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 18px; text-align: center;' }, [
+					E('div', { 'id': 'flash-step-1', 'style': 'padding: 6px 4px; border-radius: 6px; background: #dbeafe; color: #1d4ed8; font-size: 11px; font-weight: 700;' }, '1. Tải ROM'),
+					E('div', { 'id': 'flash-step-2', 'style': 'padding: 6px 4px; border-radius: 6px; background: #f1f5f9; color: #94a3b8; font-size: 11px; font-weight: 700;' }, '2. Kiểm tra'),
+					E('div', { 'id': 'flash-step-3', 'style': 'padding: 6px 4px; border-radius: 6px; background: #f1f5f9; color: #94a3b8; font-size: 11px; font-weight: 700;' }, '3. Nạp Flash'),
+					E('div', { 'id': 'flash-step-4', 'style': 'padding: 6px 4px; border-radius: 6px; background: #f1f5f9; color: #94a3b8; font-size: 11px; font-weight: 700;' }, '4. Khởi động lại')
+				]),
+
+				// Thông điệp trạng thái & Phần trăm
+				E('div', { 'style': 'display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;' }, [
+					E('span', { 'id': 'flash-modal-msg', 'style': 'font-size: 13px; font-weight: 700; color: #1e293b;' }, _('Đang chuẩn bị tải ROM...')),
+					E('span', { 'id': 'flash-modal-pct', 'style': 'font-size: 22px; font-weight: 900; color: #2563eb;' }, '0%')
+				]),
+
+				// Thanh tiến trình chính
+				E('div', { 'style': 'width: 100%; height: 16px; background: #e2e8f0; border-radius: 9999px; overflow: hidden; margin-bottom: 8px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);' }, [
+					E('div', {
+						'id': 'flash-modal-bar',
+						'style': 'height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #06b6d4, #10b981); border-radius: 9999px; transition: width 0.4s ease;'
+					})
+				]),
+
+				// Thông tin dung lượng và tốc độ
+				E('div', { 'id': 'flash-modal-sub', 'style': 'font-size: 12px; color: #64748b; font-family: monospace; text-align: right; margin-bottom: 16px;' }, '0 MB / 0 MB'),
+
+				// Cảnh báo nguồn điện
+				E('div', { 'id': 'flash-modal-warn', 'style': 'background: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; color: #be123c; font-size: 12px; font-weight: 600;' }, [
+					E('span', { 'style': 'font-size: 22px;' }, '⚠️'),
+					E('span', {}, _('CẢNH BÁO: Tuyệt đối KHÔNG tắt nguồn router hoặc đóng trình duyệt trong quá trình nạp Firmware!'))
+				])
+			]);
+
+			ui.showModal(_('🚀 Tiến trình nạp Firmware ROM'), [ modalContent ]);
+
+			// Gọi backend bắt đầu tải và nạp ROM
+			callStartFlashRom(romUrl, true, true);
+
+			// Vòng lặp lấy tiến trình thời gian thực mỗi 1 giây
+			if (flashTimer) clearInterval(flashTimer);
+			flashTimer = setInterval(function() {
+				callGetFlashStatus().then(function(st) {
+					if (!st) return;
+					var pct = parseInt(st.percent) || 0;
+					if (pct > 100) pct = 100;
+					var status = st.status || 'idle';
+					var msg = st.msg || _('Đang xử lý...');
+
+					// Cập nhật giao diện Modal
+					var mBar = document.getElementById('flash-modal-bar');
+					var mPct = document.getElementById('flash-modal-pct');
+					var mMsg = document.getElementById('flash-modal-msg');
+					var mSub = document.getElementById('flash-modal-sub');
+
+					// Cập nhật giao diện Thẻ trên trang
+					var cBar = document.getElementById('rom-card-bar');
+					var cPct = document.getElementById('rom-card-pct');
+					var cMsg = document.getElementById('rom-card-msg');
+					var cSub = document.getElementById('rom-card-sub');
+
+					if (mBar) mBar.style.width = pct + '%';
+					if (mPct) mPct.textContent = pct + '%';
+					if (mMsg) mMsg.textContent = msg;
+
+					if (cBar) cBar.style.width = pct + '%';
+					if (cPct) cPct.textContent = pct + '%';
+					if (cMsg) cMsg.textContent = msg;
+
+					var subText = '';
+					if (st.downloaded_bytes && st.total_bytes && st.total_bytes > 0) {
+						var curMb = (st.downloaded_bytes / 1048576).toFixed(1);
+						var totMb = (st.total_bytes / 1048576).toFixed(1);
+						subText = '📥 ' + curMb + ' MB / ' + totMb + ' MB (' + pct + '%)';
+					} else if (st.downloaded_bytes) {
+						var curMb = (st.downloaded_bytes / 1048576).toFixed(1);
+						subText = '📥 Đã tải về: ' + curMb + ' MB';
+					}
+					if (mSub && subText) mSub.textContent = subText;
+					if (cSub && subText) cSub.textContent = subText;
+
+					// Cập nhật highlight các bước
+					var s1 = document.getElementById('flash-step-1');
+					var s2 = document.getElementById('flash-step-2');
+					var s3 = document.getElementById('flash-step-3');
+					var s4 = document.getElementById('flash-step-4');
+
+					var setStepStyle = function(el, active, done) {
+						if (!el) return;
+						if (done) {
+							el.style.background = '#dcfce7';
+							el.style.color = '#15803d';
+						} else if (active) {
+							el.style.background = '#dbeafe';
+							el.style.color = '#1d4ed8';
+						} else {
+							el.style.background = '#f1f5f9';
+							el.style.color = '#94a3b8';
+						}
+					};
+
+					if (status === 'downloading') {
+						setStepStyle(s1, true, false);
+						setStepStyle(s2, false, false);
+						setStepStyle(s3, false, false);
+						setStepStyle(s4, false, false);
+					} else if (status === 'verifying') {
+						setStepStyle(s1, false, true);
+						setStepStyle(s2, true, false);
+						setStepStyle(s3, false, false);
+						setStepStyle(s4, false, false);
+					} else if (status === 'flashing') {
+						setStepStyle(s1, false, true);
+						setStepStyle(s2, false, true);
+						setStepStyle(s3, true, false);
+						setStepStyle(s4, false, false);
+					} else if (status === 'rebooting') {
+						setStepStyle(s1, false, true);
+						setStepStyle(s2, false, true);
+						setStepStyle(s3, false, true);
+						setStepStyle(s4, true, false);
+					}
+
+					// Xử lý khi lỗi
+					if (status === 'error') {
+						clearInterval(flashTimer);
+						flashTimer = null;
+						if (mBar) mBar.style.background = '#ef4444';
+						if (mPct) { mPct.textContent = 'LỖI!'; mPct.style.color = '#ef4444'; }
+						if (mMsg) mMsg.style.color = '#ef4444';
+						if (cBar) cBar.style.background = '#ef4444';
+						if (cPct) { cPct.textContent = 'LỖI'; cPct.style.color = '#ef4444'; }
+						ui.addNotification(null, E('p', {}, msg), 'error');
+						return;
+					}
+
+					// Xử lý khi bắt đầu reboot
+					if (status === 'rebooting' || pct >= 100) {
+						clearInterval(flashTimer);
+						flashTimer = null;
+						triggerRebootCountdown();
+					}
+				}).catch(function() {
+					// Fetch error khi router bắt đầu reboot
+				});
+			}, 1000);
+		}
+
+		function triggerRebootCountdown() {
+			var mMsg = document.getElementById('flash-modal-msg');
+			var mBar = document.getElementById('flash-modal-bar');
+			var mPct = document.getElementById('flash-modal-pct');
+			var mSub = document.getElementById('flash-modal-sub');
+			var mWarn = document.getElementById('flash-modal-warn');
+
+			if (mBar) { mBar.style.width = '100%'; mBar.style.background = '#10b981'; }
+			if (mPct) { mPct.textContent = '100%'; mPct.style.color = '#10b981'; }
+			if (mWarn) {
+				mWarn.style.background = '#ecfdf5';
+				mWarn.style.borderColor = '#a7f3d0';
+				mWarn.style.color = '#065f46';
+				mWarn.innerHTML = '<span>🎉</span><span>Quá trình ghi ROM hoàn tất! Router đang khởi động lại...</span>';
+			}
+
+			var secondsLeft = 120;
+			var cdTimer = setInterval(function() {
+				secondsLeft--;
+				if (mMsg) mMsg.textContent = _('Router đang khởi động lại Firmware mới (còn ') + secondsLeft + 's)...';
+				if (mSub) mSub.textContent = _('Tự động tải lại trang sau: ') + secondsLeft + ' giây';
+
+				if (secondsLeft <= 0) {
+					clearInterval(cdTimer);
+					window.location.reload();
+				}
+			}, 1000);
 		}
 
 		var sigTimer = null;
