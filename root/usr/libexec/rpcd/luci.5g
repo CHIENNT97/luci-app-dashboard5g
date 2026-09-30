@@ -9,7 +9,7 @@ case "$1" in
 			"rebootModem": {},
 			"listSms": {},
 			"sendSms": { "number": "string", "text": "string" },
-			"deleteSms": { "id": "string", "text": "string" },
+			"deleteSms": { "id": "string", "text": "string", "all": "boolean" },
 			"getTtl": {},
 			"setTtl": { "enabled": "boolean", "value": "string" },
 			"getWifi": {},

@@ -11,7 +11,7 @@ var callReconnect = rpc.declare({ object: 'luci.5g', method: 'reconnect', expect
 var callRebootModem = rpc.declare({ object: 'luci.5g', method: 'rebootModem', expect: { } });
 var callListSms = rpc.declare({ object: 'luci.5g', method: 'listSms', expect: { } });
 var callSendSms = rpc.declare({ object: 'luci.5g', method: 'sendSms', params: [ 'number', 'text' ], expect: { } });
-var callDeleteSms = rpc.declare({ object: 'luci.5g', method: 'deleteSms', params: [ 'id', 'text' ], expect: { } });
+var callDeleteSms = rpc.declare({ object: 'luci.5g', method: 'deleteSms', params: [ 'id', 'text', 'all' ], expect: { } });
 var callGetTtl = rpc.declare({ object: 'luci.5g', method: 'getTtl', expect: { } });
 var callSetTtl = rpc.declare({ object: 'luci.5g', method: 'setTtl', params: [ 'enabled', 'value' ], expect: { } });
 var callGetWifi = rpc.declare({ object: 'luci.5g', method: 'getWifi', expect: { } });
@@ -447,9 +447,21 @@ return view.extend({
 				]),
 
 				E('div', { 'class': 'cpe-card' }, [
-					E('div', { 'style': 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;' }, [
+					E('div', { 'style': 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;' }, [
 						E('h3', { 'style': 'margin: 0; font-size: 18px; font-weight: 700;' }, '📥 ' + _('Hộp thư SMS (Đến & Đi)')),
-						E('button', { 'class': 'cpe-btn cpe-btn-primary', 'style': 'padding: 6px 14px; font-size: 13px;', 'click': loadSmsData }, '🔄 ' + _('Làm mới tin nhắn'))
+						E('div', { 'style': 'display: flex; gap: 8px;' }, [
+							E('button', { 'class': 'cpe-btn cpe-btn-primary', 'style': 'padding: 6px 14px; font-size: 13px;', 'click': loadSmsData }, '🔄 ' + _('Làm mới')),
+							E('button', {
+								'class': 'cpe-btn cpe-btn-danger',
+								'style': 'padding: 6px 14px; font-size: 13px;',
+								'click': function() {
+									if (!confirm(_('Xóa toàn bộ tin nhắn SMS? Hành động này không thể hoàn tác!'))) return;
+									var box = document.getElementById('cpe-sms-box');
+									box.innerHTML = '<em>Đang xóa tất cả...</em>';
+									callDeleteSms('', '', true).then(function() { loadSmsData(); });
+								}
+							}, '🗑️ ' + _('Xóa tất cả'))
+						])
 					]),
 					E('div', { 'id': 'cpe-sms-box' }, [ E('em', {}, _('Đang tải danh sách SMS...')) ])
 				])
@@ -1000,19 +1012,19 @@ return view.extend({
 					var isSent = (m.state === 'sent');
 					var item = E('div', {
 						'class': 'cpe-sms-bubble',
-						'style': isSent ? 'border-left: 4px solid #0284c7; background: #f0f9ff;' : 'border-left: 4px solid #10b981; background: #f8fafc;'
+						'style': isSent ? 'border-left: 4px solid #0284c7;' : 'border-left: 4px solid #10b981;'
 					}, [
-						E('div', { 'style': 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;' }, [
-							E('span', { 'style': 'font-weight: 700; color: #1e293b;' }, (isSent ? '📤 ' + _('Gửi đến: ') : '📥 ' + _('Từ: ')) + m.number),
-							E('span', { 'style': 'font-size: 12px; color: #64748b;' }, m.timestamp || '')
+						E('div', { 'style': 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;' }, [
+							E('span', { 'style': 'font-weight: 700; color: var(--cpe-text-primary);' }, (isSent ? '📤 ' + _('Gửi đến: ') : '📥 ' + _('Từ: ')) + m.number),
+							E('span', { 'style': 'font-size: 12px; color: var(--cpe-text-secondary);' }, m.timestamp || '')
 						]),
-						E('div', { 'style': 'font-size: 14px; line-height: 1.5; color: #334155; margin-bottom: 8px;' }, m.text),
+						E('div', { 'style': 'font-size: 14px; line-height: 1.5; color: var(--cpe-text-primary); margin-bottom: 8px; word-break: break-word;' }, m.text),
 						E('button', {
 							'class': 'cpe-btn cpe-btn-danger',
 							'style': 'padding: 4px 10px; font-size: 12px;',
 							'click': function() {
 								if (!confirm(_('Xóa tin nhắn này?'))) return;
-								callDeleteSms(m.id, m.text).then(loadSmsData);
+								callDeleteSms(m.id, m.text, false).then(loadSmsData);
 							}
 						}, '🗑️ ' + _('Xóa'))
 					]);

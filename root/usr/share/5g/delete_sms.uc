@@ -17,26 +17,18 @@ try {
 	input = json(trim(inputRaw)) || {};
 } catch(e) {}
 
-let targetId = input?.id || '';
+let targetId   = input?.id   || '';
 let targetText = input?.text || '';
+let deleteAll  = input?.all  == true;
 
-if (!targetId && !targetText) {
+// Fallback: parse thủ công nếu json() không đọc được
+if (!targetId && !targetText && !deleteAll) {
 	let m = match(inputRaw, /"id"\s*:\s*"([^"]+)"/);
 	if (m) targetId = m[1];
+	if (index(inputRaw, '"all":true') >= 0 || index(inputRaw, '"all": true') >= 0) deleteAll = true;
 }
 
-// Xác định cổng AT
-let port = trim(readfile('/tmp/cpe_at_port')) || '';
-if (!port || !match(port, /\/dev\/ttyUSB/)) {
-	port = '/dev/ttyUSB0';
-}
-
-// 1. Xóa trên bộ nhớ Modem qua sms_tool & mmcli (nếu có)
-if (targetId && match(targetId, /^[0-9]+$/)) {
-	run(sprintf("flock -x /var/lock/at_port.lock /usr/bin/sms_tool -d %s delete %s 2>/dev/null", port, targetId));
-}
-
-// 2. Xóa trong file CSDL lưu trữ cục bộ
+// ── 1. Đọc DB cục bộ ─────────────────────────────────────────────────────────
 let dbMessages = [];
 let dbRaw = readfile(DB_FILE);
 if (dbRaw) {
@@ -48,6 +40,40 @@ if (dbRaw) {
 	} catch(e) {}
 }
 
+// ── 2. Xóa SMS trên Modem qua mmcli ─────────────────────────────────────────
+if (deleteAll) {
+	// Xóa toàn bộ SMS đang lưu trong ModemManager
+	let listRaw = run('mmcli -m 0 --messaging-list-sms 2>/dev/null');
+	for (let line in split(listRaw, '\n')) {
+		let mPath = match(trim(line), /\/org\/freedesktop\/ModemManager1\/SMS\/([0-9]+)/);
+		if (mPath && mPath[1]) {
+			run(sprintf("mmcli -m 0 --messaging-delete-sms='/org/freedesktop/ModemManager1/SMS/%s' 2>/dev/null", mPath[1]));
+		}
+	}
+	// Xóa toàn bộ DB cục bộ
+	writefile(DB_FILE, '[]\n');
+	print(sprintf("%J\n", { result: true, deleted: length(dbMessages) }));
+	exit(0);
+}
+
+// Xóa tin nhắn đơn lẻ trên ModemManager bằng path hoặc id
+let matchedMsg = null;
+for (let m in dbMessages) {
+	if (targetId && ("" + m.id) == ("" + targetId)) { matchedMsg = m; break; }
+	if (targetText && m.text == targetText) { matchedMsg = m; break; }
+}
+
+if (matchedMsg) {
+	// Nếu có path dbus (do mmcli lưu)
+	if (matchedMsg.path && match(matchedMsg.path, /\/SMS\/([0-9]+)/)) {
+		run(sprintf("mmcli -m 0 --messaging-delete-sms='%s' 2>/dev/null", matchedMsg.path));
+	} else if (matchedMsg.id && match("" + matchedMsg.id, /^[0-9]+$/)) {
+		// Thử theo index số
+		run(sprintf("mmcli -m 0 --messaging-delete-sms='/org/freedesktop/ModemManager1/SMS/%s' 2>/dev/null", matchedMsg.id));
+	}
+}
+
+// ── 3. Xóa trong DB cục bộ ───────────────────────────────────────────────────
 let newDb = [];
 for (let m in dbMessages) {
 	if (targetId && ("" + m.id) == ("" + targetId)) continue;
@@ -56,4 +82,4 @@ for (let m in dbMessages) {
 }
 
 writefile(DB_FILE, sprintf("%J\n", newDb));
-print(sprintf("%J\n", { result: true }));
+print(sprintf("%J\n", { result: true, deleted: length(dbMessages) - length(newDb) }));
