@@ -177,7 +177,7 @@ return view.extend({
 						// Cột 5: Băng tần hoạt động
 						E('div', { 'class': 'cpe-strip-item' }, [
 							E('div', { 'style': 'color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;' }, '🏷️ ' + _('Băng tần hoạt động')),
-							E('div', { 'style': 'font-size: 17px; font-weight: 800; color: #1e293b; margin-bottom: 4px;' }, status.band ? (status.band + ' (' + (status.caCount || 'CA') + ')') : (status.nrBand || '5G NR')),
+							E('div', { 'id': 'cpe-val-strip-band', 'style': 'font-size: 17px; font-weight: 800; color: #1e293b; margin-bottom: 4px;' }, status.band ? (status.band + ' (' + (status.caCount || 'CA') + ')') : (status.nrBand || '5G NR')),
 							E('div', { 'style': 'font-size: 12px; color: #64748b;' }, status.phone ? ('SĐT: ' + status.phone) : (status.model || _('Modem 5G Online')))
 						])
 					])
@@ -300,45 +300,9 @@ return view.extend({
 				E('div', { 'class': 'cpe-card', 'style': 'margin-bottom: 20px;' }, [
 					E('h3', { 'style': 'margin-top: 0; font-size: 17px; font-weight: 800; color: #1e1b4b; display: flex; align-items: center; gap: 8px;' }, [
 						'🏷️ ' + _('3. Chi tiết Băng tần & Cộng gộp sóng (Active Bands & CA)'),
-						E('span', { 'style': 'background: #dcfce7; color: #15803d; font-size: 12px; padding: 2px 8px; border-radius: 9999px;' }, status.caCount ? (status.caCount + ' Active') : '2CA Active')
+						E('span', { 'id': 'cpe-ca-badge', 'style': 'background: #dcfce7; color: #15803d; font-size: 12px; padding: 2px 8px; border-radius: 9999px;' }, status.caCount ? (status.caCount + ' Active') : ((status.nrBand || (status.band && status.band.indexOf('+') >= 0)) ? '2CA Active' : 'Active'))
 					]),
-					E('table', { 'class': 'table' }, [
-						E('tr', { 'class': 'tr table-titles' }, [
-							E('th', { 'class': 'th' }, _('Thành phần sóng')),
-							E('th', { 'class': 'th' }, _('Băng tần (Band)')),
-							E('th', { 'class': 'th' }, _('Tần số hoạt động')),
-							E('th', { 'class': 'th' }, _('Băng thông (BW)')),
-							E('th', { 'class': 'th' }, _('Kênh tần số (Channel)')),
-							E('th', { 'class': 'th' }, _('Trạng thái'))
-						]),
-						// Dòng 1: LTE Primary Component Carrier (PCC)
-						E('tr', { 'class': 'tr' }, [
-							E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #1e40af;' }, '4G PCC (Sóng chính)'),
-							E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [ E('span', { 'style': 'background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 6px;' }, status.lteBand || 'B3') ]),
-							E('td', { 'class': 'td' }, getBandFreq(status.lteBand || 'B3')),
-							E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, status.lteBw || '20 MHz'),
-							E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, 'EARFCN: ' + (status.lteChan || '1675')),
-							E('td', { 'class': 'td' }, [ E('span', { 'style': 'color: #10b981; font-weight: 700;' }, '● Đang kết nối') ])
-						]),
-						// Dòng 2: LTE Secondary Component Carrier (SCC1) - chỉ hiển thị khi có dữ liệu thực
-						(status.scc1Band ? E('tr', { 'class': 'tr' }, [
-							E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #0369a1;' }, '4G SCC1 (Cộng gộp 1)'),
-							E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [ E('span', { 'style': 'background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 6px;' }, status.scc1Band) ]),
-							E('td', { 'class': 'td' }, getBandFreq(status.scc1Band)),
-							E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, status.scc1Bw || '-'),
-							E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, status.scc1Chan ? ('EARFCN: ' + status.scc1Chan) : '-'),
-							E('td', { 'class': 'td' }, [ E('span', { 'style': 'color: #10b981; font-weight: 700;' }, '● Đang cộng gộp') ])
-						]) : null),
-						// Dòng 3: 5G NR Primary Carrier - chỉ hiển thị khi có kết nối 5G
-						(status.nrBand ? E('tr', { 'class': 'tr' }, [
-							E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #6b21a8;' }, '5G NR (Sóng dữ liệu 5G)'),
-							E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [ E('span', { 'style': 'background: #f3e8ff; color: #6b21a8; padding: 2px 8px; border-radius: 6px;' }, status.nrBand) ]),
-							E('td', { 'class': 'td' }, getBandFreq(status.nrBand)),
-							E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, status.nrBw || '-'),
-							E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, status.nrChan ? ('NR-ARFCN: ' + status.nrChan) : '-'),
-							E('td', { 'class': 'td' }, [ E('span', { 'style': 'color: #10b981; font-weight: 700;' }, '● Siêu tốc 5G') ])
-						]) : null)
-					])
+					E('table', { 'class': 'table', 'id': 'cpe-ca-table' }, renderCaTableRows(status))
 				]),
 
 				// Cụm 4: Trạm phát & Nhận diện mạng
@@ -347,7 +311,7 @@ return view.extend({
 					E('table', { 'class': 'table' }, [
 						E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td', 'style': 'width: 35%; font-weight: 600;' }, _('Nhà mạng (Carrier / PLMN):')), E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #1e40af;' }, (status.operator || '-') + (status.plmn ? (' [' + status.plmn + ']') : '')) ]),
 						E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, _('Chế độ mạng:')), E('td', { 'class': 'td' }, E('span', { 'style': 'background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 6px; font-weight: 700;' }, status.networkType || '4G LTE / 5G NR')) ]),
-						E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, _('Cộng gộp băng tần (Carrier Aggregation):')), E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #047857;' }, status.band ? ('Kích hoạt (' + status.band + ')') : _('Chưa kết hợp')) ]),
+						E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, _('Cộng gộp băng tần (Carrier Aggregation):')), E('td', { 'id': 'cpe-val-ca-combine', 'class': 'td', 'style': 'font-weight: 700; color: #047857;' }, status.band ? ('Kích hoạt (' + status.band + ')') : _('Chưa kết hợp')) ]),
 						E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, _('Mã trạm eNodeB / Cell ID:')), E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, status.cellId || '-') ]),
 						E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, _('Physical Cell ID (PCI) / TAC:')), E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, (status.pci ? ('PCI: ' + status.pci) : '-') + (status.tac ? (' | TAC: ' + status.tac) : '')) ])
 					])
@@ -1203,7 +1167,133 @@ return view.extend({
 						elNr.textContent = '5G NSA (Standby)';
 					}
 				}
+
+				// Cập nhật Bảng Active Bands & CA (Cụm 3) thời gian thực
+				var caTbl = document.getElementById('cpe-ca-table');
+				if (caTbl) {
+					updateElementContent(caTbl, renderCaTableRows(s));
+				}
+				var caBadge = document.getElementById('cpe-ca-badge');
+				if (caBadge) {
+					caBadge.textContent = s.caCount ? (s.caCount + ' Active') : ((s.nrBand || (s.band && s.band.indexOf('+') >= 0)) ? '2CA Active' : 'Active');
+				}
+				var stripBand = document.getElementById('cpe-val-strip-band');
+				if (stripBand) {
+					stripBand.textContent = s.band ? (s.band + ' (' + (s.caCount || 'CA') + ')') : (s.nrBand || '5G NR');
+				}
+				var caCombine = document.getElementById('cpe-val-ca-combine');
+				if (caCombine) {
+					caCombine.textContent = s.band ? ('Kích hoạt (' + s.band + ')') : _('Chưa kết hợp');
+				}
 			});
+		}
+
+		function updateElementContent(el, children) {
+			if (!el) return;
+			while (el.firstChild) {
+				el.removeChild(el.firstChild);
+			}
+			if (Array.isArray(children)) {
+				for (var i = 0; i < children.length; i++) {
+					if (children[i]) el.appendChild(children[i]);
+				}
+			} else if (children) {
+				el.appendChild(children);
+			}
+		}
+
+		function renderCaTableRows(s) {
+			s = s || {};
+			var rows = [];
+
+			// Tiêu đề bảng
+			rows.push(E('tr', { 'class': 'tr table-titles' }, [
+				E('th', { 'class': 'th' }, _('Thành phần sóng')),
+				E('th', { 'class': 'th' }, _('Băng tần (Band)')),
+				E('th', { 'class': 'th' }, _('Tần số hoạt động')),
+				E('th', { 'class': 'th' }, _('Băng thông (BW)')),
+				E('th', { 'class': 'th' }, _('Kênh tần số (Channel)')),
+				E('th', { 'class': 'th' }, _('Trạng thái'))
+			]));
+
+			// 1. LTE Primary Component Carrier (4G PCC)
+			var lteBand = (s.lteBand || (s.band ? s.band.split('+')[0].trim() : '') || 'B3').toUpperCase();
+			rows.push(E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #1e40af;' }, '4G PCC (Sóng chính)'),
+				E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [
+					E('span', { 'style': 'background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 6px;' }, lteBand)
+				]),
+				E('td', { 'class': 'td' }, getBandFreq(lteBand)),
+				E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, s.lteBw || '20 MHz'),
+				E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, s.lteChan ? ('EARFCN: ' + s.lteChan) : 'EARFCN: 1675'),
+				E('td', { 'class': 'td' }, [ E('span', { 'style': 'color: #10b981; font-weight: 700;' }, '● Đang kết nối') ])
+			]));
+
+			// 2. LTE Secondary Carrier (4G SCC1)
+			if (s.scc1Band) {
+				var scc1 = s.scc1Band.toUpperCase();
+				rows.push(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #0369a1;' }, '4G SCC1 (Cộng gộp 1)'),
+					E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [
+						E('span', { 'style': 'background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 6px;' }, scc1)
+					]),
+					E('td', { 'class': 'td' }, getBandFreq(scc1)),
+					E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, s.scc1Bw || '-'),
+					E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, s.scc1Chan ? ('EARFCN: ' + s.scc1Chan) : '-'),
+					E('td', { 'class': 'td' }, [ E('span', { 'style': 'color: #10b981; font-weight: 700;' }, '● Đang cộng gộp') ])
+				]));
+			}
+
+			// 3. LTE Secondary Carrier (4G SCC2)
+			if (s.scc2Band) {
+				var scc2 = s.scc2Band.toUpperCase();
+				rows.push(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #0369a1;' }, '4G SCC2 (Cộng gộp 2)'),
+					E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [
+						E('span', { 'style': 'background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 6px;' }, scc2)
+					]),
+					E('td', { 'class': 'td' }, getBandFreq(scc2)),
+					E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, s.scc2Bw || '-'),
+					E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, '-'),
+					E('td', { 'class': 'td' }, [ E('span', { 'style': 'color: #10b981; font-weight: 700;' }, '● Đang cộng gộp') ])
+				]));
+			}
+
+			// 4. 5G NR Carrier
+			var nrBand = s.nrBand;
+			if (!nrBand && s.band) {
+				var parts = s.band.split('+');
+				for (var i = 0; i < parts.length; i++) {
+					var p = parts[i].trim();
+					if (p.toUpperCase().indexOf('N') === 0) {
+						nrBand = p;
+						break;
+					}
+				}
+			}
+			var is5G = !!nrBand || (s.networkType && s.networkType.indexOf('5G') >= 0) || (s.nrRsrp && s.nrRsrp.indexOf('Standby') < 0 && s.nrRsrp !== '-');
+
+			if (is5G) {
+				var dispNrBand = (nrBand || 'N78').toUpperCase();
+				var dispNrBw = s.nrBw || '100 MHz';
+				var dispNrChan = s.nrChan ? ('NR-ARFCN: ' + s.nrChan) : 'NR-ARFCN: 650000';
+				var isLive5G = !!nrBand || (s.nrRsrp && s.nrRsrp.indexOf('Standby') < 0 && s.nrRsrp !== '-');
+
+				rows.push(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', 'style': 'font-weight: 700; color: #6b21a8;' }, '5G NR (Sóng dữ liệu 5G)'),
+					E('td', { 'class': 'td', 'style': 'font-weight: 800; font-size: 15px;' }, [
+						E('span', { 'style': 'background: #f3e8ff; color: #6b21a8; padding: 2px 8px; border-radius: 6px;' }, dispNrBand)
+					]),
+					E('td', { 'class': 'td' }, getBandFreq(dispNrBand)),
+					E('td', { 'class': 'td', 'style': 'font-weight: 600;' }, dispNrBw),
+					E('td', { 'class': 'td', 'style': 'font-family: monospace;' }, dispNrChan),
+					E('td', { 'class': 'td' }, [
+						E('span', { 'style': 'color: ' + (isLive5G ? '#10b981' : '#f59e0b') + '; font-weight: 700;' }, isLive5G ? '● Siêu tốc 5G' : '○ Standby 5G')
+					])
+				]));
+			}
+
+			return rows;
 		}
 
 		function renderRfMeter(label, valStr, minVal, maxVal, unit) {

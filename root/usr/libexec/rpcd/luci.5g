@@ -282,8 +282,9 @@ if (gstatus && index(gstatus, '!GSTATUS') >= 0) {
 	let mCaState = match(gstatus, /LTE CA state:\s*([^\r\n\t ]+)/i);
 	if (mCaState && mCaState[1]) data.caState = mCaState[1];
 
-	let mScc1 = match(gstatus, /SCC1 band:\s*([^\r\n\t ]+)/i);
-	if (mScc1 && mScc1[1]) {
+	let mScc1 = match(gstatus, /SCC1 (?:LTE )?band:\s*([^\r\n\t ]+)/i);
+	if (!mScc1) mScc1 = match(gstatus, /SCC1 band:\s*([^\r\n\t ]+)/i);
+	if (mScc1 && mScc1[1] && index(mScc1[1], '-') < 0 && index(mScc1[1], 'nr') < 0 && index(mScc1[1], 'NR') < 0) {
 		data.scc1Band = mScc1[1];
 		let mScc1Bw = match(gstatus, /SCC1 bw:\s*([0-9]+\s*MHz)/i);
 		if (mScc1Bw && mScc1Bw[1]) data.scc1Bw = mScc1Bw[1];
@@ -291,19 +292,28 @@ if (gstatus && index(gstatus, '!GSTATUS') >= 0) {
 		if (mScc1Chan && mScc1Chan[1]) data.scc1Chan = mScc1Chan[1];
 	}
 
-	let mScc2 = match(gstatus, /SCC2 band:\s*([^\r\n\t ]+)/i);
-	if (mScc2 && mScc2[1]) {
+	let mScc2 = match(gstatus, /SCC2 (?:LTE )?band:\s*([^\r\n\t ]+)/i);
+	if (!mScc2) mScc2 = match(gstatus, /SCC2 band:\s*([^\r\n\t ]+)/i);
+	if (mScc2 && mScc2[1] && index(mScc2[1], '-') < 0 && index(mScc2[1], 'nr') < 0 && index(mScc2[1], 'NR') < 0) {
 		data.scc2Band = mScc2[1];
 		let mScc2Bw = match(gstatus, /SCC2 bw:\s*([0-9]+\s*MHz)/i);
 		if (mScc2Bw && mScc2Bw[1]) data.scc2Bw = mScc2Bw[1];
 	}
 
-	// 3. 5G NR Metrics - chỉ lấy khi có giá trị thực (không phải ---)
-	let mNrBand = match(gstatus, /NR5G band:\s*([^\r\n\t ]+)/i);
-	if (mNrBand && mNrBand[1] && index(mNrBand[1], '-') < 0) data.nrBand = mNrBand[1];
+	// 3. 5G NR Metrics - hỗ trợ cả SCC1 NR5G band (chuẩn Sierra Wireless EM919x) và NR5G band
+	let mNrBand = match(gstatus, /(?:SCC[0-9]+\s+)?NR(?:5G)? band:\s*([^\r\n\t ]+)/i);
+	if (!mNrBand) mNrBand = match(gstatus, /NR5G band:\s*([^\r\n\t ]+)/i);
+	if (mNrBand && mNrBand[1] && index(mNrBand[1], '-') < 0) {
+		data.nrBand = mNrBand[1];
+		writefile('/tmp/cpe_last_nr_band', data.nrBand);
+	}
 
-	let mNrBw = match(gstatus, /NR5G bw:\s*([0-9]+\s*MHz)/i);
-	if (mNrBw && mNrBw[1]) data.nrBw = mNrBw[1];
+	let mNrBw = match(gstatus, /(?:SCC[0-9]+\s+)?NR(?:5G)? bw:\s*([0-9]+\s*MHz)/i);
+	if (!mNrBw) mNrBw = match(gstatus, /NR5G bw:\s*([0-9]+\s*MHz)/i);
+	if (mNrBw && mNrBw[1]) {
+		data.nrBw = mNrBw[1];
+		writefile('/tmp/cpe_last_nr_bw', data.nrBw);
+	}
 
 	let mNrRsrp = match(gstatus, /NR5G.*RSRP[^:]*:\s*(-?[0-9.]+)/i);
 	if (mNrRsrp && mNrRsrp[1]) data.nrRsrp = sprintf("%.0f dBm", +mNrRsrp[1]);
@@ -314,8 +324,26 @@ if (gstatus && index(gstatus, '!GSTATUS') >= 0) {
 	let mNrSinr = match(gstatus, /NR5G.*SINR[^:]*:\s*(-?[0-9.]+)/i);
 	if (mNrSinr && mNrSinr[1]) data.nrSinr = sprintf("%.1f dB", +mNrSinr[1]);
 
-	let mNrChan = match(gstatus, /NR5G Rx chan:\s*([0-9]+)/i);
-	if (mNrChan && mNrChan[1]) data.nrChan = mNrChan[1];
+	let mNrChan = match(gstatus, /(?:SCC[0-9]+\s+)?NR(?:5G)? Rx chan:\s*([0-9]+)/i);
+	if (!mNrChan) mNrChan = match(gstatus, /(?:SCC[0-9]+\s+)?NR(?:5G)? Tx chan:\s*([0-9]+)/i);
+	if (!mNrChan) mNrChan = match(gstatus, /NR5G Rx chan:\s*([0-9]+)/i);
+	if (mNrChan && mNrChan[1]) {
+		data.nrChan = mNrChan[1];
+		writefile('/tmp/cpe_last_nr_chan', data.nrChan);
+	}
+
+	let mSysMode = match(gstatus, /System mode:\s*([^\r\n\t ]+)/i);
+	let isEndcOr5G = (mSysMode && (mSysMode[1] == 'ENDC' || index(mSysMode[1], '5G') >= 0 || index(mSysMode[1], 'NR') >= 0)) || (data.nrRsrp && index(data.nrRsrp, 'dBm') >= 0);
+
+	// Tự phục hồi băng tần 5G từ cache nếu đang ở chế độ 5G nhưng micro-standby
+	if (!data.nrBand && isEndcOr5G) {
+		let cachedBand = trim(readfile('/tmp/cpe_last_nr_band') || '');
+		if (cachedBand) data.nrBand = cachedBand;
+		let cachedBw = trim(readfile('/tmp/cpe_last_nr_bw') || '');
+		if (cachedBw) data.nrBw = cachedBw;
+		let cachedChan = trim(readfile('/tmp/cpe_last_nr_chan') || '');
+		if (cachedChan) data.nrChan = cachedChan;
+	}
 
 	// Tổng hợp danh sách tất cả các Band đang chạy
 	let bands = [];
@@ -335,6 +363,20 @@ if (gstatus && index(gstatus, '!GSTATUS') >= 0) {
 		data.networkType = '5G-SA Standalone';
 	} else if (data.lteBand) {
 		data.networkType = '4G LTE-Advanced (' + (data.caCount || 'CA') + ')';
+	}
+}
+
+// Nếu có sóng 5G từ ModemManager nhưng gstatus chưa kịp lấy band
+if (!data.nrBand && data.nrRsrp && index(data.nrRsrp, 'dBm') >= 0) {
+	let cachedBand = trim(readfile('/tmp/cpe_last_nr_band') || '');
+	if (cachedBand) data.nrBand = cachedBand;
+	let cachedBw = trim(readfile('/tmp/cpe_last_nr_bw') || '');
+	if (cachedBw) data.nrBw = cachedBw;
+	let cachedChan = trim(readfile('/tmp/cpe_last_nr_chan') || '');
+	if (cachedChan) data.nrChan = cachedChan;
+	if (data.nrBand && !data.band) {
+		data.band = data.lteBand ? (data.lteBand + ' + ' + data.nrBand) : data.nrBand;
+		data.caCount = data.lteBand ? '2CA' : '1CA';
 	}
 }
 
